@@ -1,0 +1,25 @@
+# 製品PDF検索 — デプロイ
+
+## 初回
+cd "\\hinkan-nas\Hinkan-NAS\製造課（削除禁止）\GASアプリ\製品PDF検索"
+clasp create --type sheets --title "製品PDF検索" --rootDir .
+clasp push -f
+clasp deploy -d "初回デプロイ"
+
+## 2回目以降
+clasp push -f
+clasp deploy -i AKfycbxJoWYd4xk6Tycy6mLX0le-2sVwlJP6qID-HRBbMOJ5AI8fvr83HDpUJiKyOq38_g3D0Q -d "変更内容"
+
+## WebアプリURL
+https://script.google.com/macros/s/AKfycbxJoWYd4xk6Tycy6mLX0le-2sVwlJP6qID-HRBbMOJ5AI8fvr83HDpUJiKyOq38_g3D0Q/exec
+
+## スプレッドシート
+https://docs.google.com/spreadsheets/d/1zHB8SWhMcQJx6Yq0YHi5Z7Yucbn3kd0dbOz1t4FexT8/edit
+
+## 設定
+- 設定.js の PDF_ROOT_FOLDER_IDS（社内/社外フォルダID）
+- デプロイ後、PDF_WEBAPP_DEPLOY_ID にデプロイIDを記載（任意・URL固定用）
+
+## Webアプリ
+- 実行者: 自分
+- アクセス: 組織内（DOMAIN）
