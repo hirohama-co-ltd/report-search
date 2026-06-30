@@ -90,6 +90,187 @@ function filterProductFolders_(folders, productCodeQuery) {
   });
 }
 
+function escapeDriveSearchQuery_(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
+
+/** 製品コード未指定時はフォルダ全走査が遅いため、Drive ファイル名検索へ切り替える */
+function shouldUseDriveFileSearch_(filters) {
+  if (String(filters.productCode || '').trim()) return false;
+  if (String(filters.lotNo || '').trim()) return true;
+
+  var mfgDateFilter = filters.mfgDateFilter;
+  if (!mfgDateFilter) return false;
+  if (mfgDateFilter.partial) return true;
+  if (mfgDateFilter.from && mfgDateFilter.to) return true;
+  return false;
+}
+
+/** 製造日範囲（yyyymmdd）に含まれる年月プレフィックス（yyyymm）を列挙 */
+function getMfgDateMonthPrefixesInRange_(from, to) {
+  from = String(from || '');
+  to = String(to || '');
+  if (from.length < 8 || to.length < 8) return [];
+
+  var y = parseInt(from.substring(0, 4), 10);
+  var m = parseInt(from.substring(4, 6), 10);
+  var endY = parseInt(to.substring(0, 4), 10);
+  var endM = parseInt(to.substring(4, 6), 10);
+  if (isNaN(y) || isNaN(m) || isNaN(endY) || isNaN(endM)) return [];
+
+  var prefixes = [];
+  var seen = {};
+  while (y < endY || (y === endY && m <= endM)) {
+    var prefix = String(y) + ('0' + m).slice(-2);
+    if (!seen[prefix]) {
+      seen[prefix] = true;
+      prefixes.push(prefix);
+    }
+    m++;
+    if (m > 12) {
+      m = 1;
+      y++;
+    }
+  }
+  return prefixes;
+}
+
+function buildDriveFileSearchQueries_(filters) {
+  var baseParts = ['mimeType = "application/pdf"', 'trashed = false'];
+  var lotNo = String(filters.lotNo || '').trim();
+
+  if (lotNo) {
+    return [baseParts.concat([
+      'title contains "' + escapeDriveSearchQuery_(lotNo) + '"'
+    ]).join(' and ')];
+  }
+
+  var mfgDateFilter = filters.mfgDateFilter;
+  if (!mfgDateFilter) return [];
+
+  if (mfgDateFilter.partial) {
+    return [baseParts.concat([
+      'title contains "' + escapeDriveSearchQuery_(mfgDateFilter.partial) + '"'
+    ]).join(' and ')];
+  }
+
+  if (mfgDateFilter.from && mfgDateFilter.to) {
+    if (mfgDateFilter.from === mfgDateFilter.to) {
+      return [baseParts.concat([
+        'title contains "' + escapeDriveSearchQuery_(mfgDateFilter.from) + '"'
+      ]).join(' and ')];
+    }
+
+    var prefixes = getMfgDateMonthPrefixesInRange_(mfgDateFilter.from, mfgDateFilter.to);
+    if (!prefixes.length) return [];
+
+    var queries = [];
+    for (var i = 0; i < prefixes.length; i++) {
+      queries.push(baseParts.concat([
+        'title contains "' + escapeDriveSearchQuery_(prefixes[i]) + '"'
+      ]).join(' and '));
+    }
+    return queries;
+  }
+
+  return [];
+}
+
+function isFileUnderRootFolder_(fileOrId, rootFolderId) {
+  rootFolderId = String(rootFolderId || '').trim();
+  if (!rootFolderId) return false;
+
+  try {
+    var file = typeof fileOrId === 'string' ? DriveApp.getFileById(fileOrId) : fileOrId;
+    var folder = file.getParents().hasNext() ? file.getParents().next() : null;
+    while (folder) {
+      if (folder.getId() === rootFolderId) return true;
+      var parents = folder.getParents();
+      folder = parents.hasNext() ? parents.next() : null;
+    }
+  } catch (e) {
+    Logger.log('isFileUnderRootFolder_: ' + e.message);
+  }
+  return false;
+}
+
+function buildPdfSearchResultItem_(file, parsed, yearFallback) {
+  return {
+    fileId: file.getId(),
+    fileName: parsed.fileName,
+    productCode: parsed.productCode,
+    lotNo: parsed.lotNo,
+    mfgDate: parsed.mfgDate,
+    year: parsed.year || yearFallback || '',
+    updatedAt: Utilities.formatDate(
+      file.getLastUpdated(),
+      Session.getScriptTimeZone(),
+      'yyyy-MM-dd HH:mm'
+    ),
+    viewUrl: buildPdfContentUrl_(file.getId(), 'view'),
+    downloadUrl: buildPdfContentUrl_(file.getId(), 'download')
+  };
+}
+
+function finalizePdfSearchResults_(scope, results, state) {
+  results.sort(function(a, b) {
+    var da = a.mfgDate || '';
+    var db = b.mfgDate || '';
+    if (da !== db) return db.localeCompare(da);
+    return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+  });
+
+  return {
+    scope: scope,
+    scopeLabel: PDF_SCOPE_LABELS[scope] || scope,
+    count: results.length,
+    truncated: state.truncated,
+    maxResults: PDF_SEARCH_MAX_RESULTS,
+    items: results
+  };
+}
+
+function searchPdfsViaDriveFileSearch_(scope, filters) {
+  var rootFolderId = getPdfRootFolderId_(scope);
+  var queries = buildDriveFileSearchQueries_(filters);
+  if (!queries.length) {
+    return finalizePdfSearchResults_(scope, [], { truncated: false });
+  }
+
+  var results = [];
+  var state = { truncated: false };
+  var seen = {};
+
+  for (var q = 0; q < queries.length; q++) {
+    if (state.truncated) break;
+
+    var it = DriveApp.searchFiles(queries[q]);
+    while (it.hasNext()) {
+      if (state.truncated) break;
+      var file = it.next();
+      var fileId = file.getId();
+      if (seen[fileId]) continue;
+      seen[fileId] = true;
+
+      if (!isFileUnderRootFolder_(file, rootFolderId)) continue;
+
+      var parsed = parsePdfFileName_(file.getName());
+      if (!parsed) continue;
+      if (!isPdfScopeMatch_(parsed, scope)) continue;
+      if (!matchesSearchFilters_(parsed, filters)) continue;
+
+      results.push(buildPdfSearchResultItem_(file, parsed, parsed.year));
+      if (results.length >= PDF_SEARCH_MAX_RESULTS) {
+        state.truncated = true;
+      }
+    }
+  }
+
+  return finalizePdfSearchResults_(scope, results, state);
+}
+
 function listYearFolders_(productFolderId) {
   var folder = DriveApp.getFolderById(productFolderId);
   var list = [];
@@ -114,21 +295,7 @@ function collectPdfsFromYearFolder_(yearFolderId, scope, filters, results, state
     if (!isPdfScopeMatch_(parsed, scope)) continue;
     if (!matchesSearchFilters_(parsed, filters)) continue;
 
-    results.push({
-      fileId: file.getId(),
-      fileName: parsed.fileName,
-      productCode: parsed.productCode,
-      lotNo: parsed.lotNo,
-      mfgDate: parsed.mfgDate,
-      year: parsed.year || folder.getName(),
-      updatedAt: Utilities.formatDate(
-        file.getLastUpdated(),
-        Session.getScriptTimeZone(),
-        'yyyy-MM-dd HH:mm'
-      ),
-      viewUrl: buildPdfContentUrl_(file.getId(), 'view'),
-      downloadUrl: buildPdfContentUrl_(file.getId(), 'download')
-    });
+    results.push(buildPdfSearchResultItem_(file, parsed, folder.getName()));
 
     if (results.length >= PDF_SEARCH_MAX_RESULTS) {
       state.truncated = true;
@@ -149,6 +316,10 @@ function searchProductPdfs(payload) {
     mfgDateFilter: mfgDateFilter
   };
 
+  if (shouldUseDriveFileSearch_(filters)) {
+    return searchPdfsViaDriveFileSearch_(scope, filters);
+  }
+
   var productFolders = getCachedProductFolders_(rootFolderId);
   productFolders = filterProductFolders_(productFolders, filters.productCode);
 
@@ -165,21 +336,7 @@ function searchProductPdfs(payload) {
     }
   }
 
-  results.sort(function(a, b) {
-    var da = a.mfgDate || '';
-    var db = b.mfgDate || '';
-    if (da !== db) return db.localeCompare(da);
-    return (b.updatedAt || '').localeCompare(a.updatedAt || '');
-  });
-
-  return {
-    scope: scope,
-    scopeLabel: PDF_SCOPE_LABELS[scope] || scope,
-    count: results.length,
-    truncated: state.truncated,
-    maxResults: PDF_SEARCH_MAX_RESULTS,
-    items: results
-  };
+  return finalizePdfSearchResults_(scope, results, state);
 }
 
 function isFileUnderPdfRoots_(fileId) {
