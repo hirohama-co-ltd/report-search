@@ -10,8 +10,9 @@ clasp deploy -d "初回デプロイ"
 clasp push -f
 clasp deploy -i AKfycbxJoWYd4xk6Tycy6mLX0le-2sVwlJP6qID-HRBbMOJ5AI8fvr83HDpUJiKyOq38_g3D0Q -d "変更内容"
 
-## WebアプリURL
-https://script.google.com/macros/s/AKfycbxJoWYd4xk6Tycy6mLX0le-2sVwlJP6qID-HRBbMOJ5AI8fvr83HDpUJiKyOq38_g3D0Q/exec
+## 本番デプロイ情報
+デプロイID: AKfycbxJoWYd4xk6Tycy6mLX0le-2sVwlJP6qID-HRBbMOJ5AI8fvr83HDpUJiKyOq38_g3D0Q（@18）
+WebアプリURL: https://script.google.com/macros/s/AKfycbxJoWYd4xk6Tycy6mLX0le-2sVwlJP6qID-HRBbMOJ5AI8fvr83HDpUJiKyOq38_g3D0Q/exec
 
 ## スプレッドシート
 https://docs.google.com/spreadsheets/d/1zHB8SWhMcQJx6Yq0YHi5Z7Yucbn3kd0dbOz1t4FexT8/edit
